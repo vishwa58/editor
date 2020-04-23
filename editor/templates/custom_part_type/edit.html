@@ -581,6 +581,27 @@
                             </div>
                         <!-- /ko -->
                         </div>
+
+                        <div data-bind="if: input_widget().name=='custom'">
+                        <!-- ko with: input_widget().model -->
+                            <div class="form-group">
+                                <label class="{{form_label_class}} control-label">
+                                    Code to render the input widget
+                                </label>
+                                <div class="{{form_control_class}}">
+                                    <textarea {% if not editable %}disabled{% endif %} class="code" data-bind="codemirror: create"></textarea>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label class="{{form_label_class}} control-label">
+                                    Code to run when the student's answer changes
+                                </label>
+                                <div class="{{form_control_class}}">
+                                    <textarea {% if not editable %}disabled{% endif %} class="code" data-bind="codemirror: set_answer"></textarea>
+                                </div>
+                            </div>
+                        <!-- /ko -->
+                        </div>
                     </form>
 
                     {% if editable %}

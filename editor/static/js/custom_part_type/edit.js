@@ -252,6 +252,25 @@ $(document).ready(function() {
             toJSON: function(out) {
                 out.choices = this.choices.toJSON();
             }
+        },
+        {
+            'name': 'custom',
+            'niceName': 'Custom',
+            model: function() {
+                var model = {
+                    create: ko.observable(''),
+                    set_answer: ko.observable('')
+                }
+                return model;
+            },
+            load: function(data) {
+                this.create(data.create || '');
+                this.set_answer(data.set_answer || '');
+            },
+            toJSON: function(out) {
+                out.create = this.create();
+                out.set_answer = this.set_answer();
+            }
         }
     ];
 

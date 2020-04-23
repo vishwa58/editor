@@ -571,6 +571,7 @@ CUSTOM_PART_TYPE_INPUT_WIDGETS = [
     ('radios', 'Radio buttons'),
     ('checkboxes', 'Choose several from a list'),
     ('dropdown', 'Drop-down box'),
+    ('custom', 'Custom'),
 ]
 
 class CustomPartType(models.Model, ControlledObject):
