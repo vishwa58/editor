@@ -207,7 +207,9 @@ Numbas.tryInit = function()
 }
 
 Numbas.runImmediately = function(deps,fn) {
-    Numbas.queueScript('base',[], function() {});
+    if(!scriptreqs['base']) {
+        Numbas.queueScript('base',[], function() {});
+    }
     var missing_dependencies = deps.filter(function(r) {
         if(!scriptreqs[r]) {
             return true;
@@ -218,7 +220,7 @@ Numbas.runImmediately = function(deps,fn) {
         }
     });
     if(missing_dependencies.length) {
-        console.log(deps.filter(function(r){return scriptreqs[r].executed}));
+        console.log(deps.filter(function(r){return scriptreqs[r] ? scriptreqs[r].executed : true}));
         throw(new Error("Can't run because the following dependencies have not run: "+missing_dependencies.join(', ')));
     }
     fn();
@@ -5725,6 +5727,11 @@ jme.substituteTreeOps.take = function(tree,scope,allowUnbound) {
     return {tok:tree.tok, args: args};
 }
 
+newBuiltin('enumerate',[TList],TList,function(list) {
+    return list.map(function(v,i) {
+        return new TList([new TInt(i),v]);
+    });
+});
 
 
 /** Is the given token the value `true`?
@@ -10966,7 +10973,11 @@ jme.variables = /** @lends Numbas.jme.variables */ {
             case 'html':
                 return token.value;
             case 'string':
-                return token.value.replace(/\\([{}])/g,'$1');
+                var html = token.value.replace(/\\([{}])/g,'$1');
+                if(token.latex) {
+                    html = '\\('+html+'\\)';
+                }
+                return html;
             case 'list':
                 return '[ '+token.value.map(function(item){return doToken(item)}).join(', ')+' ]';
             default:
@@ -11888,7 +11899,7 @@ Part.prototype = /** @lends Numbas.parts.Part.prototype */ {
         };
         if(name=='mark') {
             // hack on a finalised_state for old marking scripts
-            script = 'var res = (function(scope) {'+script+'\n}).apply(this,arguments); this.answered = true; return res || {states: this.markingFeedback.slice(), valid: true, credit: this.credit};';
+            script = 'var res = (function(scope) {'+script+'\n}).apply(this,arguments); this.answered = true; return res || {states: this.markingFeedback.slice(), valid: true, credit: this.credit, values: {}, script_result: {states: {}, state_valid: {mark: true, interpreted_answer: true}, values: {}, state_errors: {}}};';
         }
         with(withEnv) {
             script = eval('(function(){try{'+script+'\n}catch(e){e = new Numbas.Error(\'part.script.error\',{path:this.name,script:name,message:e.message}); Numbas.showError(e); throw(e);}})');
@@ -12457,6 +12468,7 @@ Part.prototype = /** @lends Numbas.parts.Part.prototype */ {
                 this.setWarnings(result.warnings);
                 this.markingFeedback = result.markingFeedback.slice();
                 this.finalised_result = result.finalised_result;
+                this.adaptiveMarkingUsed = result.adaptiveMarkingUsed;
                 this.marking_values = result.values;
                 this.credit = result.credit;
                 this.answered = result.answered;
@@ -13147,6 +13159,7 @@ Part.prototype = /** @lends Numbas.parts.Part.prototype */ {
             np.instance.removeNextPart(np2);
         });
         np.instance = null;
+        np.instanceVariables = null;
         if(this.display) {
             this.display.updateNextParts();
         }
@@ -13471,6 +13484,10 @@ var Question = Numbas.Question = function( number, exam, group, gscope, store)
  *
  * @event Numbas.Question#variablesGenerated
  */
+/** The question advice has been shown to the student.
+ *
+ * @event Numbas.Question#adviceDisplayed
+ */
 /** The question is fully loaded and ready to use.
  *
  * @event Numbas.Question#ready
@@ -13548,10 +13565,10 @@ Question.prototype = /** @lends Numbas.Question.prototype */
             q.name = q.customName.trim();
         }
 
-        var statementNode = q.xml.selectSingleNode('statement/content/span');
-        q.statement = statementNode.innerHTML;
-        var adviceNode = q.xml.selectSingleNode('advice/content/span');
-        q.advice = adviceNode.innerHTML;
+        var statementNode = q.xml.selectSingleNode('statement');
+        q.statement = Numbas.xml.serializeMessage(statementNode);
+        var adviceNode = q.xml.selectSingleNode('advice');
+        q.advice = Numbas.xml.serializeMessage(adviceNode);
 
         var preambleNodes = q.xml.selectNodes('preambles/preamble');
         for(var i = 0; i<preambleNodes.length; i++) {
@@ -14219,6 +14236,7 @@ Question.prototype = /** @lends Numbas.Question.prototype */
         if(!Numbas.is_instructor && this.exam && !this.exam.settings.reviewShowAdvice) {
             return;
         }
+        this.signals.trigger('adviceDisplayed');
         this.adviceDisplayed = true;
         this.display && this.display.showAdvice(true);
         if(this.store && !dontStore) {
@@ -14329,13 +14347,7 @@ Question.prototype = /** @lends Numbas.Question.prototype */
                     p.score = 0;
                     p.applied = false;
                 });
-                var defaultObjective = {score: 0, answered: false, limit: this.maxMarks};
-                for(var i=0; i<this.parts.length; i++) {
-                    var part = this.parts[i];
-                    var objective = this.getObjective(part.settings.exploreObjective) || defaultObjective;
-                    objective.score += part.score;
-                    objective.answered = objective.answered || part.answered;
-
+                this.allParts().forEach(function(part) {
                     part.nextParts.forEach(function(np) {
                         if(np.instance) {
                             var penalty = q.getPenalty(np.penalty);
@@ -14345,9 +14357,16 @@ Question.prototype = /** @lends Numbas.Question.prototype */
                             }
                         }
                     });
-                }
-                var objectives = this.objectives.concat([defaultObjective]);
-                objectives.forEach(function(o) {
+
+                    var objective = q.getObjective(part.settings.exploreObjective);
+                    if(!objective) {
+                        return;
+                    }
+                    objective.score += part.score;
+                    objective.answered = objective.answered || part.answered;
+
+                });
+                this.objectives.forEach(function(o) {
                     o.score = Math.min(o.limit,o.score);
                     score += o.score;
                 });
@@ -16305,7 +16324,7 @@ var math = Numbas.math = /** @lends Numbas.math */ {
      */
     parseScientific: function(str) {
         var m = /(-?\d[ \d]*(?:\.\d[ \d]*)?)e([\-+]?\d[ \d]*)/i.exec(str);
-        return {significand: parseFloat(m[1].replace(' ','')), exponent: parseInt(m[2].replace(' ',''))};
+        return {significand: parseFloat(m[1].replace(/ /g,'')), exponent: parseInt(m[2].replace(/ /g,''))};
     },
 
     /** If the given string is scientific notation representing a number, return a string of the form `\d+\.\d+`.
@@ -16320,10 +16339,10 @@ var math = Numbas.math = /** @lends Numbas.math */ {
             return str;
         }
         var minus = m[1] || '';
-        var significand_integer = m[2].replace(' ','');
-        var significand_decimal = (m[3] || '').replace(' ','');
+        var significand_integer = m[2].replace(/ /g,'');
+        var significand_decimal = (m[3] || '').replace(/ /g,'');
         var digits = significand_integer+significand_decimal;
-        var pow = parseInt(m[4].replace(' ',''));
+        var pow = parseInt(m[4].replace(/ /g,''));
         pow += significand_integer.length
         var zm = digits.match(/^(0+)[^0]/);
         if(zm) {
